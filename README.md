@@ -8,6 +8,7 @@ Institutional-grade historical download + live streaming for Binance spot klines
 
 - [Architecture](#architecture)
 - [Quickstart — Local Python](#quickstart--local-python)
+- [Quickstart — Server](#quickstart--server)
 - [Docker Setup](#docker-setup)
   - [Modes](#modes)
   - [First Run](#first-run)
@@ -82,6 +83,23 @@ python main.py update
 
 # Store health summary
 python main.py status
+```
+
+---
+
+## Quickstart — Server
+
+```bash
+# Clone and enter
+git clone https://github.com/Evanfot/binance-klines.git
+cd binance-klines
+
+# Download full history then start streaming
+# (add BINANCE_START_DATE=2024-01-01 to limit how far back)
+BINANCE_MODE=init docker compose up -d
+
+# Watch progress
+docker logs -f binance-data
 ```
 
 ---
