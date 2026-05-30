@@ -22,7 +22,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - ./klines:/app/klines
+      - binance-klines:/app/klines
       - binance-logs:/app/logs
     environment:
       # init   → download full history then stream
@@ -46,6 +46,8 @@ services:
       start_period: 10s
 
 volumes:
+  binance-klines:
+    name: binance-klines
   binance-logs:
     name: binance-logs
 

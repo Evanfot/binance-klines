@@ -3,10 +3,12 @@ Central configuration for the Binance data system.
 Edit this file to change behaviour across the entire system.
 """
 
+import os
 from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent
+# BINANCE_DATA_ROOT overrides the default source-relative root (set in Docker).
+ROOT = Path(os.environ["BINANCE_DATA_ROOT"]) if os.environ.get("BINANCE_DATA_ROOT") else Path(__file__).parent
 HISTORICAL_DIR = ROOT / "klines" / "historical"
 LIVE_DIR       = ROOT / "klines" / "live"
 LOG_DIR        = ROOT / "logs"
