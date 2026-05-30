@@ -1,0 +1,56 @@
+version: "3.9"
+
+# ── Binance Data Service ───────────────────────────────────────────────────────
+#
+# Usage:
+#   First run (download history + stream):
+#     BINANCE_MODE=init docker compose up -d
+#
+#   Subsequent runs (stream only, history already on disk):
+#     docker compose up -d
+#
+#   Read-only replica (e.g. second strategy container on same host):
+#     BINANCE_MODE=api docker compose up -d
+#
+# Other containers on the same host can join `binance-net` and reach the API
+# at http://binance-data:8000, or mount the `binance-klines` volume directly.
+
+services:
+  binance-data:
+    build: .
+    image: binance-data:latest
+    container_name: binance-data
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./klines:/app/klines
+      - binance-logs:/app/logs
+    environment:
+      # init   → download full history then stream
+      # stream → stream only (default; history must already be populated)
+      # api    → serve HTTP API only (no streaming; useful for read-only replicas)
+      BINANCE_MODE: "${BINANCE_MODE:-stream}"
+      # Only used when BINANCE_MODE=init — earliest date to download:
+      BINANCE_START_DATE: "${BINANCE_START_DATE:-}"
+      API_PORT: "8000"
+      # Enable the raw SQL endpoint only on fully trusted internal networks.
+      # It is restricted to SELECT statements and blocks filesystem functions,
+      # but the safest default is off.
+      QUERY_ENABLED: "${QUERY_ENABLED:-false}"
+    networks:
+      - binance-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  binance-logs:
+    name: binance-logs
+
+networks:
+  binance-net:
+    name: binance-net

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binance-data"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "duckdb>=1.0",
+    "requests",
+    "websockets",
+    "aiohttp",
+]
+
+[tool.setuptools]
+# Flat-module layout — each .py file is a top-level importable module.
+# Editable install adds this directory to sys.path so intra-package
+# imports (e.g. "from config import ...") continue to work unchanged.
+py-modules = ["config", "storage", "universe", "logger", "downloader", "stream", "symbol_map"]
