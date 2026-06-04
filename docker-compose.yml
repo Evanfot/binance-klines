@@ -47,9 +47,9 @@ services:
 
 volumes:
   binance-klines:
-    name: binance-klines
+    external: true
   binance-logs:
-    name: binance-logs
+    external: true
 
 networks:
   binance-net:
