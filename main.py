@@ -89,8 +89,27 @@ async def cmd_stream(args) -> None:
 async def cmd_update(args) -> None:
     """Download yesterday's files and exit. Run via cron after UTC midnight."""
     from downloader import run_daily_update
+    from closes import update as update_closes
     log.info("=== DAILY UPDATE ===")
     await run_daily_update()
+    log.info("=== UPDATING DAILY CLOSES ===")
+    update_closes()
+
+
+async def cmd_closes_build(args) -> None:
+    """Build daily_closes.parquet from all historical 1m files."""
+    from closes import build
+    log.info("=== BUILDING DAILY CLOSES ===")
+    build()
+
+
+def cmd_closes_update(args) -> None:
+    """Append yesterday's closes to daily_closes.parquet."""
+    from closes import update
+    from datetime import date as _date
+    yesterday = args.date or (_date.today() - __import__("datetime").timedelta(days=1))
+    log.info("=== CLOSES UPDATE ===")
+    update(yesterday=yesterday)
 
 
 def cmd_status(args) -> None:
@@ -162,11 +181,18 @@ Examples:
   # Stream only (historical already downloaded)
   python main.py stream
 
-  # Daily cron update (run after UTC midnight)
+  # Daily cron update (run after UTC midnight) — also updates closes
   python main.py update
 
   # Check store health
   python main.py status
+
+  # Build daily_closes.parquet from scratch (run once after initial download)
+  python main.py closes-build
+
+  # Manually append one day's closes (normally handled by 'update')
+  python main.py closes-update
+  python main.py closes-update --date 2025-06-01
         """,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -176,16 +202,22 @@ Examples:
                         help="Earliest date to download (default: Binance launch)")
 
     sub.add_parser("stream", help="Stream only")
-    sub.add_parser("update", help="Download yesterday and exit")
+    sub.add_parser("update", help="Download yesterday and exit (also updates closes)")
     sub.add_parser("status", help="Print store health summary")
+    sub.add_parser("closes-build", help="Build daily_closes.parquet from all 1m history")
+    p_closes_update = sub.add_parser("closes-update", help="Append yesterday's closes (standalone)")
+    p_closes_update.add_argument("--date", type=date.fromisoformat, default=None,
+                                 help="Date to update (default: yesterday)")
 
     args = parser.parse_args()
 
     dispatch = {
-        "init":   cmd_init,
-        "stream": cmd_stream,
-        "update": cmd_update,
-        "status": cmd_status,
+        "init":          cmd_init,
+        "stream":        cmd_stream,
+        "update":        cmd_update,
+        "status":        cmd_status,
+        "closes-build":  cmd_closes_build,
+        "closes-update": cmd_closes_update,
     }
 
     fn = dispatch[args.cmd]
