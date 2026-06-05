@@ -330,6 +330,7 @@ class DataStore:
             live = self.live.read_all(symbol)
             if not live.empty:
                 hist = pd.concat([hist, live], ignore_index=True)
+                hist["open_time"] = pd.to_datetime(hist["open_time"], utc=True)
                 hist = hist.drop_duplicates(subset=["open_time"]).sort_values("open_time")
 
         return hist
@@ -354,6 +355,7 @@ class DataStore:
             if live_frames:
                 live_all = pd.concat(live_frames, ignore_index=True)
                 hist = pd.concat([hist, live_all], ignore_index=True)
+                hist["open_time"] = pd.to_datetime(hist["open_time"], utc=True)
                 hist = (
                     hist.drop_duplicates(subset=["symbol", "open_time"])
                     .sort_values(["symbol", "open_time"])
