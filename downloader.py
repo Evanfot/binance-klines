@@ -277,8 +277,13 @@ async def run_daily_update() -> None:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     downloaded = sum(r.get("downloaded", 0) for r in results if isinstance(r, dict))
+    skipped    = sum(r.get("skipped", 0)    for r in results if isinstance(r, dict))
     failed     = sum(r.get("failed", 0)     for r in results if isinstance(r, dict))
-    log.info("daily update complete — downloaded: %d  failed: %d", downloaded, failed)
+    log.info(
+        "daily update complete — downloaded: %d  skipped (not yet on Binance): %d  failed: %d",
+        downloaded, skipped, failed,
+    )
+    return {"downloaded": downloaded, "skipped": skipped, "failed": failed}
 
 
 # ── Gap checker ────────────────────────────────────────────────────────────────

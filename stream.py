@@ -332,14 +332,22 @@ class ChunkedStreamManager:
             log.info("rollover complete")
 
             # Download yesterday's completed daily files into the historical store.
-            # Binance typically publishes them a few minutes after UTC midnight.
-            await asyncio.sleep(300)
-            log.info("running daily historical update")
-            try:
-                from downloader import run_daily_update
-                await run_daily_update()
-            except Exception as exc:
-                log.error("daily update failed: %s", exc)
+            # Binance publishes daily files at an unpredictable time (typically 3-8h
+            # after UTC midnight). Retry hourly until something downloads.
+            from downloader import run_daily_update
+            for attempt in range(1, 13):
+                await asyncio.sleep(300)
+                log.info("running daily historical update (attempt %d/12)", attempt)
+                try:
+                    result = await run_daily_update()
+                except Exception as exc:
+                    log.error("daily update failed: %s", exc)
+                    break
+                if result.get("downloaded", 0) > 0 or result.get("failed", 0) > 0:
+                    break
+                if attempt < 12:
+                    log.info("files not yet available — retrying in 1 hour")
+                    await asyncio.sleep(3600 - 300)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
