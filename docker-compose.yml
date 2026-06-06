@@ -36,7 +36,6 @@ services:
       # It is restricted to SELECT statements and blocks filesystem functions,
       # but the safest default is off.
       QUERY_ENABLED: "${QUERY_ENABLED:-false}"
-      BINANCE_DATA_ROOT: "${BINANCE_DATA_ROOT:-/app/klines}"
     networks:
       - binance-net
     healthcheck:
