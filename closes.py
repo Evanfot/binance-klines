@@ -133,7 +133,7 @@ def load_closes(
 
 _AGG_SQL = """
     SELECT
-        CAST(open_time AT TIME ZONE 'UTC' AS DATE)       AS date,
+        CAST(open_time AS DATE)                          AS date,
         regexp_extract(filename, '/([^/]+)/1m/', 1)      AS symbol,
         arg_min(open,  open_time)                        AS open,
         max(high)                                        AS high,
@@ -146,6 +146,7 @@ _AGG_SQL = """
              THEN sum(quote_volume) / sum(volume)
              ELSE NULL END                               AS vwap
     FROM read_parquet('{glob}', filename=true)
+    WHERE year(CAST(open_time AS DATE)) BETWEEN 1900 AND 9999
     GROUP BY date, symbol
     ORDER BY date, symbol
 """
@@ -155,6 +156,7 @@ def _aggregate_glob(glob: str) -> pd.DataFrame:
     """Run the aggregation SQL over a parquet glob. Returns empty DF if no files match."""
     try:
         con = duckdb.connect()
+        con.execute("SET TimeZone='UTC'")
         df = con.execute(_AGG_SQL.format(glob=glob)).df()
         df["date"] = pd.to_datetime(df["date"]).dt.date
         return df
