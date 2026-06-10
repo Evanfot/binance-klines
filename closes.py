@@ -27,7 +27,7 @@ from config import HISTORICAL_DIR, INTERVAL, ROOT
 
 log = logging.getLogger(__name__)
 
-CLOSES_PATH = ROOT / "klines" / "daily_closes.parquet"
+CLOSES_PATH = ROOT / "klines" / "processed" / "daily_closes.parquet"
 
 CLOSES_SCHEMA = pa.schema([
     pa.field("date",         pa.date32()),

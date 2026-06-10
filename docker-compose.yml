@@ -10,8 +10,14 @@
 #   Read-only replica (e.g. second strategy container on same host):
 #     BINANCE_MODE=api docker compose up -d
 #
+# Data lives in the project directory on the host (override with BINANCE_DATA_DIR):
+#   klines/historical/   — daily 1m parquet files per symbol
+#   klines/live/         — intraday stream buffer
+#   klines/processed/    — derived files (daily_closes.parquet, etc.)
+#   logs/                — application logs
+#
 # Other containers on the same host can join `binance-net` and reach the API
-# at http://binance-data:8000, or mount the `binance-klines` volume directly.
+# at http://binance-data:8000.
 
 services:
   binance-data:
@@ -22,8 +28,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - binance-klines:/app/klines
-      - binance-logs:/app/logs
+      - ${BINANCE_DATA_DIR:-.}:/data
     environment:
       # init   → download full history then stream
       # stream → stream only (default; history must already be populated)
@@ -32,6 +37,7 @@ services:
       # Only used when BINANCE_MODE=init — earliest date to download:
       BINANCE_START_DATE: "${BINANCE_START_DATE:-}"
       API_PORT: "8000"
+      BINANCE_DATA_ROOT: "/data"
       # Enable the raw SQL endpoint only on fully trusted internal networks.
       # It is restricted to SELECT statements and blocks filesystem functions,
       # but the safest default is off.
@@ -44,12 +50,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-volumes:
-  binance-klines:
-    external: true
-  binance-logs:
-    external: true
 
 networks:
   binance-net:
