@@ -335,6 +335,7 @@ class ChunkedStreamManager:
             # Binance publishes daily files at an unpredictable time (typically 3-8h
             # after UTC midnight). Retry hourly until something downloads.
             from downloader import run_daily_update
+            downloaded = False
             for attempt in range(1, 13):
                 await asyncio.sleep(300)
                 log.info("running daily historical update (attempt %d/12)", attempt)
@@ -344,10 +345,19 @@ class ChunkedStreamManager:
                     log.error("daily update failed: %s", exc)
                     break
                 if result.get("downloaded", 0) > 0 or result.get("failed", 0) > 0:
+                    downloaded = True
                     break
                 if attempt < 12:
                     log.info("files not yet available — retrying in 1 hour")
                     await asyncio.sleep(3600 - 300)
+
+            if downloaded:
+                try:
+                    from closes import update as update_closes
+                    update_closes()
+                    log.info("daily closes updated")
+                except Exception as exc:
+                    log.error("closes update failed: %s", exc)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
