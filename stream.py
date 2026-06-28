@@ -320,11 +320,34 @@ class ChunkedStreamManager:
             m.stop()
 
     async def _midnight_rollover_loop(self) -> None:
-        """Single rollover loop for all chunks — fires once at UTC midnight."""
+        """Single rollover loop for all chunks — fires once at UTC midnight.
+
+        Just before the clear, snapshot a *provisional* daily close from the live
+        buffer so consumers get the day's near-final close without waiting for the
+        official Binance daily file (published 3-8h later). update() overwrites it
+        once that file lands.
+        """
+        # Snapshot 20 min before the buffer clears, leaving margin for the downstream
+        # trader's nightly cache rebuild (23:45 UTC) to pick it up before it decides.
+        PROVISIONAL_LEAD_S = 1200
+
         while True:
+            # 1. Wake shortly before midnight and snapshot the provisional close
+            #    (the live buffer still holds the full day at this point).
+            lead_sleep = _next_midnight_utc() - time.time() - PROVISIONAL_LEAD_S
+            if lead_sleep > 0:
+                log.info("provisional close snapshot in %.0f seconds", lead_sleep)
+                await asyncio.sleep(lead_sleep)
+            try:
+                from closes import update_provisional
+                update_provisional()
+            except Exception as exc:
+                log.error("provisional closes update failed: %s", exc)
+
+            # 2. Wait for the actual UTC-midnight rollover.
             sleep_s = _next_midnight_utc() - time.time() + 5  # +5s buffer
             log.info("midnight rollover in %.0f seconds", sleep_s)
-            await asyncio.sleep(sleep_s)
+            await asyncio.sleep(max(0, sleep_s))
 
             log.info("UTC midnight rollover — clearing intraday buffers")
             for manager in self.managers:
