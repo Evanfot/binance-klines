@@ -6,16 +6,18 @@ Output: klines/daily_closes.parquet  (single file, sorted by date then symbol)
 
 Entry points
 ------------
-build()        — full rebuild from scratch (slow; run once)
-update()       — append / refresh one day (fast; run daily after the 1m download)
-load_closes()  — load the wide pivot matrix (dates × symbols)
+build()              — full rebuild from scratch (slow; run once)
+update()             — append / refresh one day from historical (official; provisional=False)
+update_provisional() — upsert today's close from the live 1m buffer before the official
+                       daily file is published (provisional=True; later overwritten by update())
+load_closes()        — load the wide pivot matrix (dates × symbols)
 """
 
 from __future__ import annotations
 
 import logging
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
@@ -23,7 +25,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from config import HISTORICAL_DIR, INTERVAL, ROOT
+from config import HISTORICAL_DIR, INTERVAL, LIVE_DIR, ROOT
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +42,9 @@ CLOSES_SCHEMA = pa.schema([
     pa.field("quote_volume", pa.float64()),
     pa.field("num_trades",   pa.int64()),
     pa.field("vwap",         pa.float64()),
+    # True for a same-day close synthesised from the live 1m buffer (update_provisional);
+    # False once the official daily file from Binance lands (build / update).
+    pa.field("provisional",  pa.bool_()),
 ])
 
 
@@ -103,6 +108,87 @@ def update(yesterday: date | None = None, output_path: Path = CLOSES_PATH) -> No
     log.info("closes updated: +%d rows for %s", len(new_df), yesterday)
 
 
+def update_provisional(
+    day: date | None = None,
+    output_path: Path = CLOSES_PATH,
+    max_staleness_min: float = 10.0,
+) -> bool:
+    """Upsert a *provisional* daily close for `day` from the live 1m buffer.
+
+    The daily close is ``arg_max(close, open_time)`` over the day's 1m bars, which the
+    live buffer (``klines/live/<symbol>/{intraday,current_bar}.parquet``) holds until
+    the UTC-midnight clear. Run shortly before midnight to get a near-final close
+    without waiting for Binance to publish the official daily file. The row is flagged
+    ``provisional=True`` and is later overwritten by :func:`update` (``provisional=False``).
+
+    Skips writing (returns ``False``) if there is no live data, the freshest bar is
+    older than ``max_staleness_min`` (a dead/stalled stream), or an official close for
+    ``day`` already exists — so consumers block rather than trade on stale prices.
+    Returns ``True`` on a successful write.
+    """
+    if day is None:
+        day = datetime.now(timezone.utc).date()
+
+    glob = str(LIVE_DIR / "*" / "*.parquet")
+    con = None
+    try:
+        con = duckdb.connect()
+        con.execute("SET TimeZone='UTC'")
+        df = con.execute(_AGG_SQL_LIVE.format(glob=glob, day=day.isoformat())).df()
+    except duckdb.IOException:
+        log.warning("provisional %s: no live buffer files at %s — not written", day, glob)
+        return False
+    finally:
+        if con is not None:
+            con.close()
+
+    df = df[df["symbol"].astype(bool)]  # drop rows whose symbol failed to parse
+    if df.empty:
+        log.warning("provisional %s: no live 1m bars for the day — not written", day)
+        return False
+
+    last_bar = pd.to_datetime(df["last_bar"], utc=True).max()
+    age_min = (datetime.now(timezone.utc) - last_bar.to_pydatetime()).total_seconds() / 60
+    if age_min > max_staleness_min:
+        log.warning(
+            "provisional %s: freshest live bar is %.1f min old (> %.0f) — stream stale, not written",
+            day, age_min, max_staleness_min,
+        )
+        return False
+
+    df = df.drop(columns=["last_bar"])
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["provisional"] = True
+
+    if not output_path.exists():
+        log.warning("provisional %s: %s missing — run build() first; skipping", day, output_path)
+        return False
+
+    existing = pq.read_table(output_path).to_pandas()
+    if "provisional" not in existing.columns:
+        existing["provisional"] = False
+    existing["provisional"] = existing["provisional"].fillna(False).astype(bool)
+    existing["date"] = pd.to_datetime(existing["date"]).dt.date
+
+    # Never clobber an already-final (official) row for this day.
+    if not existing[(existing["date"] == day) & (~existing["provisional"])].empty:
+        log.info("provisional %s: official close already present — skipping", day)
+        return False
+
+    existing = existing[existing["date"] != day]
+    combined = (
+        pd.concat([existing, df], ignore_index=True)
+        .sort_values(["date", "symbol"])
+        .reset_index(drop=True)
+    )
+    _write(combined, output_path)
+    log.info(
+        "provisional closes written: %d symbols for %s (freshest bar %.1f min old)",
+        len(df), day, age_min,
+    )
+    return True
+
+
 def load_closes(
     column: str = "close",
     start: date | None = None,
@@ -151,6 +237,30 @@ _AGG_SQL = """
     ORDER BY date, symbol
 """
 
+# Same aggregation, but over the live buffer (klines/live/<symbol>/{intraday,current_bar}.parquet).
+# Symbol comes from the path segment after 'live/'; restricted to one day; `last_bar` lets the
+# caller reject a stalled stream. union_by_name tolerates the two live files having identical cols.
+_AGG_SQL_LIVE = """
+    SELECT
+        CAST(open_time AS DATE)                          AS date,
+        regexp_extract(filename, 'live/([^/]+)/', 1)     AS symbol,
+        arg_min(open,  open_time)                        AS open,
+        max(high)                                        AS high,
+        min(low)                                         AS low,
+        arg_max(close, open_time)                        AS close,
+        sum(volume)                                      AS volume,
+        sum(quote_volume)                                AS quote_volume,
+        sum(num_trades)::BIGINT                          AS num_trades,
+        CASE WHEN sum(volume) > 0
+             THEN sum(quote_volume) / sum(volume)
+             ELSE NULL END                               AS vwap,
+        max(open_time)                                   AS last_bar
+    FROM read_parquet('{glob}', filename=true, union_by_name=true)
+    WHERE CAST(open_time AS DATE) = DATE '{day}'
+    GROUP BY date, symbol
+    ORDER BY date, symbol
+"""
+
 
 def _aggregate_glob(glob: str) -> pd.DataFrame:
     """Run the aggregation SQL over a parquet glob. Returns empty DF if no files match."""
@@ -166,6 +276,11 @@ def _aggregate_glob(glob: str) -> pd.DataFrame:
 
 def _write(df: pd.DataFrame, path: Path) -> None:
     """Atomic write: temp file then rename."""
+    df = df.copy()
+    if "provisional" not in df.columns:
+        df["provisional"] = False
+    # Official rows (build/update) and rows from pre-flag files have no/NaN flag → final.
+    df["provisional"] = df["provisional"].fillna(False).astype(bool)
     table = pa.Table.from_pandas(df, schema=CLOSES_SCHEMA, safe=False)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as tf:

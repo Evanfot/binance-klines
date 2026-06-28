@@ -112,6 +112,14 @@ def cmd_closes_update(args) -> None:
     update(yesterday=yesterday)
 
 
+def cmd_closes_provisional(args) -> None:
+    """Snapshot today's provisional close from the live buffer (normally the stream does this)."""
+    from closes import update_provisional
+    log.info("=== PROVISIONAL CLOSE ===")
+    ok = update_provisional(day=args.date)
+    log.info("provisional close write %s", "succeeded" if ok else "skipped")
+
+
 def cmd_status(args) -> None:
     """Print a health summary of the historical store."""
     from storage import HistoricalStore
@@ -209,15 +217,21 @@ Examples:
     p_closes_update.add_argument("--date", type=date.fromisoformat, default=None,
                                  help="Date to update (default: yesterday)")
 
+    p_closes_prov = sub.add_parser("closes-provisional",
+                                   help="Snapshot today's provisional close from the live buffer")
+    p_closes_prov.add_argument("--date", type=date.fromisoformat, default=None,
+                               help="Day to snapshot (default: today UTC)")
+
     args = parser.parse_args()
 
     dispatch = {
-        "init":          cmd_init,
-        "stream":        cmd_stream,
-        "update":        cmd_update,
-        "status":        cmd_status,
-        "closes-build":  cmd_closes_build,
-        "closes-update": cmd_closes_update,
+        "init":               cmd_init,
+        "stream":             cmd_stream,
+        "update":             cmd_update,
+        "status":             cmd_status,
+        "closes-build":       cmd_closes_build,
+        "closes-update":      cmd_closes_update,
+        "closes-provisional": cmd_closes_provisional,
     }
 
     fn = dispatch[args.cmd]
