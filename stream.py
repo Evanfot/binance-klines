@@ -39,17 +39,28 @@ UTC = timezone.utc
 
 # ── Bar parsing ────────────────────────────────────────────────────────────────
 
+def _epoch_to_dt(epoch: float) -> datetime:
+    """Binance epoch (ms or µs) → UTC datetime.
+
+    Binance moved some kline feeds to microsecond epochs in 2025; detect the scale
+    by magnitude (a real ms date is < ~5e12, µs is ~1e15) so a format change can't
+    silently corrupt timestamps (parsing µs as ms inflated dates to year ~58461).
+    """
+    divisor = 1_000_000 if epoch > 5_000_000_000_000 else 1_000
+    return datetime.fromtimestamp(epoch / divisor, tz=UTC)
+
+
 def _parse_kline_event(msg: dict) -> dict:
     """Parse a Binance kline websocket message into a bar dict."""
     k = msg["k"]
     return {
-        "open_time":               datetime.fromtimestamp(k["t"] / 1000, tz=UTC),
+        "open_time":               _epoch_to_dt(k["t"]),
         "open":                    float(k["o"]),
         "high":                    float(k["h"]),
         "low":                     float(k["l"]),
         "close":                   float(k["c"]),
         "volume":                  float(k["v"]),
-        "close_time":              datetime.fromtimestamp(k["T"] / 1000, tz=UTC),
+        "close_time":              _epoch_to_dt(k["T"]),
         "quote_volume":            float(k["q"]),
         "num_trades":              int(k["n"]),
         "taker_buy_base_volume":   float(k["V"]),
@@ -61,13 +72,13 @@ def _parse_kline_event(msg: dict) -> dict:
 def _parse_rest_kline(row: list) -> dict:
     """Parse a REST API klines row into a bar dict."""
     return {
-        "open_time":               datetime.fromtimestamp(row[0] / 1000, tz=UTC),
+        "open_time":               _epoch_to_dt(row[0]),
         "open":                    float(row[1]),
         "high":                    float(row[2]),
         "low":                     float(row[3]),
         "close":                   float(row[4]),
         "volume":                  float(row[5]),
-        "close_time":              datetime.fromtimestamp(row[6] / 1000, tz=UTC),
+        "close_time":              _epoch_to_dt(row[6]),
         "quote_volume":            float(row[7]),
         "num_trades":              int(row[8]),
         "taker_buy_base_volume":   float(row[9]),

@@ -138,9 +138,14 @@ def _parse_csv(zip_bytes: bytes) -> pd.DataFrame:
     df = df.iloc[:, :11]
     df.columns = KLINE_COLUMNS  # type: ignore[assignment]
 
-    # Convert timestamps to datetime
-    df["open_time"]  = pd.to_datetime(df["open_time"],  unit="ms", utc=True).dt.as_unit("ms")
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True).dt.as_unit("ms")
+    # Convert timestamps to datetime. Binance moved daily kline archives to
+    # MICROSECOND epochs in 2025 (older archives are milliseconds), so detect the
+    # scale by magnitude — a real ms date is < ~5e12, µs is ~1e15. Parsing µs as ms
+    # silently inflated dates to year ~58461, which the closes builder then dropped.
+    for _col in ("open_time", "close_time"):
+        _vals = pd.to_numeric(df[_col], errors="coerce")
+        _unit = "us" if _vals.max() > 5_000_000_000_000 else "ms"
+        df[_col] = pd.to_datetime(_vals, unit=_unit, utc=True).dt.as_unit("ms")
 
     # Numeric coercion
     float_cols = ["open", "high", "low", "close", "volume", "quote_volume",
