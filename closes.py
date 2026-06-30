@@ -70,42 +70,72 @@ def build(output_path: Path = CLOSES_PATH) -> None:
     )
 
 
-def update(yesterday: date | None = None, output_path: Path = CLOSES_PATH) -> None:
-    """
-    Append one day's closes to daily_closes.parquet.
+# Re-check this many trailing days on every update. Binance publishes daily 1m
+# archives with a 1-2 day lag, so a day's file often isn't present when update()
+# first runs for it. Re-checking a window means a lagged day gets filled once it
+# lands, instead of being tried once and skipped forever (which silently froze
+# daily_closes for ~3 weeks).
+BACKFILL_DAYS = 14
 
-    Falls back to a full build if the file does not exist yet.
-    Idempotent — safe to run multiple times for the same day.
+
+def update(
+    yesterday: date | None = None,
+    output_path: Path = CLOSES_PATH,
+    backfill_days: int = BACKFILL_DAYS,
+) -> None:
+    """
+    Refresh daily closes for the trailing ``backfill_days`` window up to ``yesterday``.
+
+    Aggregates every day in the window that has 1m files and isn't already final in
+    the file (plus ``yesterday`` itself), then upserts. Falls back to a full build if
+    the file doesn't exist. Idempotent. Days without 1m files yet are logged and
+    retried on the next run rather than skipped permanently.
     """
     if yesterday is None:
-        yesterday = date.today() - timedelta(days=1)
+        yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
 
     if not output_path.exists():
         log.info("closes file missing — running full build")
         build(output_path)
         return
 
-    glob = str(HISTORICAL_DIR / "*" / INTERVAL / f"{yesterday.isoformat()}.parquet")
-    log.info("updating daily closes for %s", yesterday)
-
-    new_df = _aggregate_glob(glob)
-    if new_df.empty:
-        log.warning("no 1m files found for %s — closes not updated", yesterday)
-        return
-
     existing = pq.read_table(output_path).to_pandas()
     existing["date"] = pd.to_datetime(existing["date"]).dt.date
+    if "provisional" not in existing.columns:
+        existing["provisional"] = False
+    existing["provisional"] = existing["provisional"].fillna(False).astype(bool)
 
-    # Drop any existing rows for this date (makes the operation idempotent)
-    existing = existing[existing["date"] != yesterday]
+    # Days we already have a FINAL (non-provisional) close for can be left alone;
+    # provisional days are eligible for upgrade to the official bar.
+    have_final = set(existing.loc[~existing["provisional"], "date"])
+    window = {yesterday - timedelta(days=i) for i in range(max(1, backfill_days))}
+    targets = sorted((window - have_final) | {yesterday})
 
+    frames = []
+    for d in targets:
+        glob = str(HISTORICAL_DIR / "*" / INTERVAL / f"{d.isoformat()}.parquet")
+        df_d = _aggregate_glob(glob)
+        if df_d.empty:
+            log.info("closes: no 1m files for %s yet — will retry next run", d)
+        else:
+            frames.append(df_d)
+
+    if not frames:
+        log.warning("closes: no 1m files for any of %d target day(s) up to %s",
+                    len(targets), yesterday)
+        return
+
+    new_df = pd.concat(frames, ignore_index=True)
+    new_dates = set(new_df["date"])
+    existing = existing[~existing["date"].isin(new_dates)]  # official replaces provisional
     combined = (
         pd.concat([existing, new_df], ignore_index=True)
         .sort_values(["date", "symbol"])
         .reset_index(drop=True)
     )
     _write(combined, output_path)
-    log.info("closes updated: +%d rows for %s", len(new_df), yesterday)
+    log.info("closes updated: +%d rows across %d day(s), latest %s",
+             len(new_df), len(new_dates), max(new_dates))
 
 
 def update_provisional(
