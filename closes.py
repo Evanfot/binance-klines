@@ -105,11 +105,15 @@ def update(
         existing["provisional"] = False
     existing["provisional"] = existing["provisional"].fillna(False).astype(bool)
 
-    # Days we already have a FINAL (non-provisional) close for can be left alone;
-    # provisional days are eligible for upgrade to the official bar.
-    have_final = set(existing.loc[~existing["provisional"], "date"])
+    # Re-aggregate the whole trailing window every run — do NOT skip days that already
+    # have a final close. Binance publishes each symbol's daily 1m archive with a variable
+    # (1-2 day, sometimes longer) lag, and not all symbols land at once, so a day first
+    # appears PARTIAL. A previous date-level "already final → skip" check froze such days at
+    # their first-seen coverage forever (e.g. 114/430), because one early symbol marked the
+    # whole date final. Re-aggregating picks up whatever 1m files exist *now*, letting a
+    # partial day keep filling as lagged files land.
     window = {yesterday - timedelta(days=i) for i in range(max(1, backfill_days))}
-    targets = sorted((window - have_final) | {yesterday})
+    targets = sorted(window | {yesterday})
 
     frames = []
     for d in targets:
@@ -126,16 +130,21 @@ def update(
         return
 
     new_df = pd.concat(frames, ignore_index=True)
-    new_dates = set(new_df["date"])
-    existing = existing[~existing["date"].isin(new_dates)]  # official replaces provisional
+    # Upsert by (date, symbol): drop only the existing rows the new aggregation replaces —
+    # official rows overwrite same-day provisionals per symbol, a partial day gains its
+    # newly-landed symbols, and symbols present only in the existing file (e.g. their 1m
+    # archive has since been pruned) are never dropped. Simple whole-day replace would lose
+    # those and could regress coverage.
+    key = ["date", "symbol"]
+    replaced = existing.set_index(key).index.isin(new_df.set_index(key).index)
     combined = (
-        pd.concat([existing, new_df], ignore_index=True)
-        .sort_values(["date", "symbol"])
+        pd.concat([existing[~replaced], new_df], ignore_index=True)
+        .sort_values(key)
         .reset_index(drop=True)
     )
     _write(combined, output_path)
     log.info("closes updated: +%d rows across %d day(s), latest %s",
-             len(new_df), len(new_dates), max(new_dates))
+             len(new_df), new_df["date"].nunique(), max(new_df["date"]))
 
 
 def update_provisional(
@@ -216,6 +225,16 @@ def update_provisional(
         "provisional closes written: %d symbols for %s (freshest bar %.1f min old)",
         len(df), day, age_min,
     )
+    # Loudly flag a degraded stream: if far fewer symbols had bars today than have a
+    # live buffer dir, WS chunks are likely dead and the provisional (hence downstream
+    # signals) will be sparse — the failure that silently dropped ~400 symbols.
+    n_live = sum(1 for _ in LIVE_DIR.iterdir()) if LIVE_DIR.exists() else 0
+    if n_live and len(df) < 0.5 * n_live:
+        log.warning(
+            "provisional %s: only %d/%d streamed symbols had bars today — stream likely "
+            "degraded (dead WS chunk?); downstream signals will be sparse",
+            day, len(df), n_live,
+        )
     return True
 
 
