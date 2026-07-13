@@ -178,7 +178,15 @@ class KlineStreamManager:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Run the stream indefinitely, reconnecting on failure."""
+        """Run the stream indefinitely, reconnecting on failure.
+
+        Never permanently abandons the connection. Transient WS faults (e.g. 1011
+        keepalive ping timeouts) are routine on a 24/7 daemon; a previous bounded
+        retry cap ``raise``d after WS_MAX_RECONNECT_ATTEMPTS, which killed 2 of 3
+        stream chunks for 10 days and silently dropped ~400 symbols from the live
+        buffer (and thus from the provisional close). We now retry forever with
+        capped backoff, escalating the log severity once past the threshold.
+        """
         self._running = True
         backoff = WS_RECONNECT_BACKOFF_S
         attempts = 0
@@ -190,12 +198,11 @@ class KlineStreamManager:
                 attempts = 0
             except Exception as exc:
                 attempts += 1
-                if attempts > WS_MAX_RECONNECT_ATTEMPTS:
-                    log.error("max reconnect attempts reached — giving up")
-                    raise
-                log.warning(
-                    "stream error (attempt %d/%d): %s — reconnecting in %.1fs",
-                    attempts, WS_MAX_RECONNECT_ATTEMPTS, exc, backoff,
+                level = logging.ERROR if attempts >= WS_MAX_RECONNECT_ATTEMPTS else logging.WARNING
+                log.log(
+                    level,
+                    "stream error (attempt %d, %d symbols): %s — reconnecting in %.1fs",
+                    attempts, len(self.symbols), exc, backoff,
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
@@ -315,18 +322,37 @@ class ChunkedStreamManager:
             KlineStreamManager(chunk, on_bar=on_bar, on_tick=on_tick)
             for chunk in chunks
         ]
+        self._running = True
         log.info(
             "chunked stream: %d symbols across %d connections",
             len(symbols), len(self.managers),
         )
 
     async def run(self) -> None:
+        # Supervise each chunk independently so one connection's failure can neither
+        # take the others down nor orphan them — asyncio.gather does not cancel siblings
+        # on error. return_exceptions=True keeps the gather alive if a coroutine exits.
         await asyncio.gather(
             self._midnight_rollover_loop(),
-            *[m.run() for m in self.managers],
+            *[self._supervise(m) for m in self.managers],
+            return_exceptions=True,
         )
 
+    async def _supervise(self, manager: "KlineStreamManager") -> None:
+        """Restart a chunk's stream if its run() ever returns or raises."""
+        while self._running:
+            try:
+                await manager.run()
+            except Exception as exc:
+                log.error("chunk (%d symbols) crashed: %s", len(manager.symbols), exc)
+            if not self._running:
+                break
+            log.error("chunk (%d symbols) stream ended — restarting in 5s",
+                      len(manager.symbols))
+            await asyncio.sleep(5)
+
     def stop(self) -> None:
+        self._running = False
         for m in self.managers:
             m.stop()
 
