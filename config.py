@@ -39,6 +39,11 @@ MAX_CONCURRENT_DOWNLOADS = 8    # parallel symbol downloads
 RETRY_ATTEMPTS           = 3
 RETRY_BACKOFF_S          = 2.0  # seconds, doubles on each retry
 VERIFY_CHECKSUMS         = True
+# Daily update re-checks this trailing window (not just yesterday) so that a day's
+# 1m archives, which Binance publishes per-symbol over the following 1-2 days, keep
+# filling as they land instead of freezing at whatever coverage existed the morning
+# after. Matches the closes re-aggregation window (closes.BACKFILL_DAYS).
+DAILY_UPDATE_BACKFILL_DAYS = 14
 
 # ── Live stream ───────────────────────────────────────────────────────────────
 # How many completed 1m bars to keep in the live intraday parquet per symbol.
