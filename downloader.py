@@ -27,6 +27,7 @@ from config import (
     BINANCE_BASE_URL,
     BINANCE_DATA_PREFIX,
     BINANCE_REST_URL,
+    DAILY_UPDATE_BACKFILL_DAYS,
     INTERVAL,
     MAX_CONCURRENT_DOWNLOADS,
     RETRY_ATTEMPTS,
@@ -257,24 +258,32 @@ async def run_initial_download(start: date | None = None) -> None:
 
 async def run_daily_update() -> None:
     """
-    Download yesterday's files for all symbols already in the store.
+    Refresh a trailing window of daily files for all symbols already in the store.
     Run this once after UTC midnight each day.
+
+    We re-check ``DAILY_UPDATE_BACKFILL_DAYS`` back, not just yesterday, because Binance
+    publishes each symbol's daily 1m archive with a variable (1-2 day, sometimes longer)
+    lag and not all symbols land at once. A yesterday-only update grabbed whatever was
+    published that morning and never revisited the day, freezing it at partial coverage
+    (e.g. 92/430) forever. download_symbol only fetches dates missing on disk, so the
+    wider window just fills lagged holes — days already complete cost nothing but stats.
     """
     store   = HistoricalStore()
     symbols = store.available_symbols()
     yesterday = _yesterday()
+    start = yesterday - timedelta(days=DAILY_UPDATE_BACKFILL_DAYS - 1)
 
     if not symbols:
         log.warning("no symbols in historical store — run initial download first")
         return
 
-    log.info("daily update: %d symbols for %s", len(symbols), yesterday)
+    log.info("daily update: %d symbols, window %s..%s", len(symbols), start, yesterday)
 
     sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
     async def bounded(session, symbol):
         async with sem:
-            return await download_symbol(session, store, symbol, start=yesterday)
+            return await download_symbol(session, store, symbol, start=start)
 
     connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_DOWNLOADS * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
