@@ -50,6 +50,15 @@ DAILY_UPDATE_BACKFILL_DAYS = 14
 # Older bars are already in historical; this is just a rolling buffer.
 LIVE_INTRADAY_BUFFER_BARS = 1440   # 24h of 1m bars
 
+# Seconds before the UTC-midnight buffer clear to snapshot the provisional daily
+# close. The snapshot captures the current day's near-final close from the live 1m
+# buffer; the smaller this lead, the closer the provisional is to the true 23:59:59
+# close. Kept at 120s (snapshot ~23:58) so it lands well within the ~2 min before the
+# 00:00 clear (the aggregation+write takes ~2-3s) and is comfortably present when the
+# downstream trader caches at 00:01. Was 1200s (23:40) back when the trader rebuilt at
+# 23:45 and needed a wider margin; the trader now runs at 00:01, so the lead can shrink.
+PROVISIONAL_LEAD_S = 120
+
 # Reconnect behaviour
 WS_MAX_RECONNECT_ATTEMPTS = 10
 WS_RECONNECT_BACKOFF_S    = 1.0   # doubles each attempt, capped at 60s

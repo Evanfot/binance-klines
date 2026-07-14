@@ -27,6 +27,7 @@ from config import (
     BINANCE_REST_URL,
     BINANCE_WS_URL,
     INTERVAL,
+    PROVISIONAL_LEAD_S,
     WS_MAX_RECONNECT_ATTEMPTS,
     WS_RECONNECT_BACKOFF_S,
 )
@@ -364,10 +365,9 @@ class ChunkedStreamManager:
         official Binance daily file (published 3-8h later). update() overwrites it
         once that file lands.
         """
-        # Snapshot 20 min before the buffer clears, leaving margin for the downstream
-        # trader's nightly cache rebuild (23:45 UTC) to pick it up before it decides.
-        PROVISIONAL_LEAD_S = 1200
-
+        # Snapshot PROVISIONAL_LEAD_S before the buffer clears (config, ~23:58). Kept
+        # close to midnight so the provisional ≈ the true 23:59:59 close, while still
+        # landing before the 00:00 clear and before the trader caches at 00:01.
         while True:
             # 1. Wake shortly before midnight and snapshot the provisional close
             #    (the live buffer still holds the full day at this point).
