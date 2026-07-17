@@ -125,12 +125,18 @@ container manages downloading, streaming, and the UTC midnight rollover by itsel
 | `python main.py init` | `BINANCE_MODE=init docker compose up -d` |
 | `python main.py stream` | `docker compose up -d` (stream is the default) |
 | `python main.py status` | `curl http://localhost:8000/status` |
-| `python main.py update` | Not needed — the running stream handles midnight rollover automatically |
+| `python main.py update` | **Required — schedule as a daily cron** (see [Cron / Scheduling](#cron--scheduling)). The stream does *not* do this. |
 
 Each container runs three things in one process:
 1. The HTTP API on port 8000 — available immediately on startup
 2. The historical download in the background (only when `BINANCE_MODE=init`)
-3. Continuous streaming — including the UTC midnight rollover (clears intraday buffer, moves yesterday into historical)
+3. Continuous streaming — including the UTC midnight rollover: it snapshots a **provisional** daily close and clears the intraday buffer
+
+> **The stream does not populate the historical store or finalize daily closes.**
+> Downloading Binance's official daily archives and rolling them into
+> `daily_closes.parquet` is `main.py update`, which you must schedule separately —
+> see [Cron / Scheduling](#cron--scheduling). Skip it and `daily_closes.parquet`
+> freezes at the provisional snapshot.
 
 Data is stored on a named Docker volume (`binance-klines`) and survives container
 restarts, so history is never re-downloaded.
@@ -170,6 +176,11 @@ docker compose up -d
 # Check what's in the store
 curl http://localhost:8000/status
 ```
+
+> **Required:** schedule `main.py update` as a daily cron so official daily
+> archives are downloaded and `daily_closes.parquet` is finalized — the stream
+> does not do this. See [Cron / Scheduling](#cron--scheduling). Verify the whole
+> pipeline any time with `./diagnose.sh`.
 
 ### Connecting Other Containers
 
@@ -550,18 +561,42 @@ SYMBOL_OVERRIDE: list[str] | None = None
 
 ## Cron / Scheduling
 
-Run `main.py update` after UTC midnight each day to collect yesterday's files.
-The stream handles the UTC midnight rollover automatically when running continuously.
+**`main.py update` must run on a schedule — this is required, not optional.** The
+continuously-running stream keeps the live buffer and writes a *provisional* daily
+close near midnight, but it does **not** download Binance's official daily archives
+or finalize them into `daily_closes.parquet`. Only `main.py update` does that.
+Skip it and `daily_closes.parquet` freezes at the provisional snapshot while the
+stream still looks healthy — downstream consumers then silently degrade (NaN
+signals from partial/provisional data).
 
-**Local cron:**
-```cron
-# 00:05 UTC daily — collect yesterday, exit cleanly
-5 0 * * * cd /path/to/binance_data && python main.py update >> logs/cron.log 2>&1
+`main.py update` re-checks a trailing 14-day window (`DAILY_UPDATE_BACKFILL_DAYS`),
+so every run is idempotent and self-heals Binance's staggered 1–2 day archive
+publication. Run it a few times a day; the last run before your consumer's
+pre-midnight read is the important one.
+
+**Host cron against the running container (recommended).** A ready-to-install
+definition lives in [`deploy/binance-update.cron`](deploy/binance-update.cron).
+Install it into **root's** crontab — the container runs as root, so both `docker`
+and the root-owned `logs/` dir require it:
+
+```bash
+( sudo crontab -l 2>/dev/null; cat deploy/binance-update.cron ) | sudo crontab -
+sudo crontab -l    # verify
 ```
 
-**Docker cron (separate container, same volume):**
+Times are in the system timezone — confirm it is UTC (`date +%Z`); `CRON_TZ=` is
+omitted because not all cron implementations support it. Adjust the repo path and
+container name in the file to match your host.
+
+**Local (non-Docker) cron:**
+```cron
+# 23:30 UTC daily — finalize the day before a pre-midnight consumer read
+30 23 * * * cd /path/to/binance_data && python main.py update >> logs/cron.log 2>&1
+```
+
+**Docker sidecar (separate container, same volume) — alternative to host cron:**
 ```yaml
-# Add to docker-compose.yml
+# Add to docker-compose.yml, then trigger on a schedule (host cron / systemd timer)
   binance-update:
     image: binance-data:latest
     command: python main.py update
@@ -571,6 +606,13 @@ The stream handles the UTC midnight rollover automatically when running continuo
     networks:
       - binance-net
     restart: "no"      # exit after update; use host cron or a scheduler to trigger
+```
+
+**Verify it is actually running** — stream up, live buffer fresh, closes
+finalizing (provisional count falling), and the cron present:
+
+```bash
+./diagnose.sh
 ```
 
 ---

@@ -1,0 +1,31 @@
+# binance-klines — daily closes finalizer (cron)
+# ─────────────────────────────────────────────────────────────────────────────
+# `main.py update` downloads Binance's official daily 1m archives (trailing
+# 14-day window) and finalizes them into daily_closes.parquet. The running stream
+# does NOT do this — it only keeps the live buffer and writes a *provisional*
+# close near midnight. Without this cron, daily_closes.parquet freezes at that
+# provisional snapshot and downstream consumers silently degrade (NaN signals).
+#
+# The 14-day re-check window makes every run idempotent and self-healing against
+# Binance's staggered 1-2 day archive publication.
+#
+# INSTALL into ROOT's crontab — the container runs as root, so both `docker` and
+# the root-owned logs/ dir require it:
+#
+#     ( sudo crontab -l 2>/dev/null; cat deploy/binance-update.cron ) | sudo crontab -
+#     sudo crontab -l          # verify
+#
+# TIMEZONE: times below are in the system timezone. Confirm it is UTC (`date +%Z`).
+# If it is not, shift the 23:30 line so it still lands just before your strategy's
+# pre-midnight (UTC) cache read. `CRON_TZ=` is intentionally omitted — not all cron
+# implementations support it.
+#
+# PATH: adjust /home/ev/projects/binance-klines to your checkout, and `binance-data`
+# to your container name if you changed it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Finalize the day just before the strategy's ~23:45 UTC cache read.
+30 23 * * *     cd /home/ev/projects/binance-klines && docker exec binance-data python main.py update >> logs/update.log 2>&1
+
+# Catch each symbol's official archive as Binance publishes them through the day.
+0 5,11,17 * * * cd /home/ev/projects/binance-klines && docker exec binance-data python main.py update >> logs/update.log 2>&1
