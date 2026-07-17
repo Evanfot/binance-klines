@@ -15,14 +15,18 @@
 #     ( sudo crontab -l 2>/dev/null; cat deploy/binance-update.cron ) | sudo crontab -
 #     sudo crontab -l          # verify
 #
-# TIMEZONE: times below are in the system timezone. Confirm it is UTC (`date +%Z`).
-# If it is not, shift the 23:30 line so it still lands just before your strategy's
-# pre-midnight (UTC) cache read. `CRON_TZ=` is intentionally omitted — not all cron
-# implementations support it.
+# TIMEZONE: uncomment the CRON_TZ line below to pin the schedule to UTC (Vixie/cronie
+# support it; some minimal crons — e.g. busybox — do not, and will error with
+# "bad minute"). If you leave it commented, times run in the system timezone —
+# confirm it is UTC with `date +%Z`, otherwise shift the 23:30 line so it still
+# lands just before your strategy's pre-midnight (UTC) cache read.
 #
 # PATH: adjust /home/ev/projects/binance-klines to your checkout, and `binance-data`
-# to your container name if you changed it.
+# to your container name if you changed it. NOTE: in ROOT's crontab, `~` expands to
+# /root, not your home — always use the absolute path shown below.
 # ─────────────────────────────────────────────────────────────────────────────
+
+#CRON_TZ=UTC
 
 # Finalize the day just before the strategy's ~23:45 UTC cache read.
 30 23 * * *     cd /home/ev/projects/binance-klines && docker exec binance-data python main.py update >> logs/update.log 2>&1
