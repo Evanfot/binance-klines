@@ -225,7 +225,11 @@ class KlineStreamManager:
         log.info("connecting to Binance WS (%d symbols)", len(self.symbols))
 
         async with aiohttp.ClientSession() as session:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+            # ping_timeout is generous (60s, was 10s) so a busy event loop — the per-tick
+            # synchronous parquet writes in _handle_message can stall it for seconds under a
+            # 100+ symbol chunk — does not trip the client keepalive and force a needless
+            # reconnect. Binance sends its own server pings, so liveness is still detected.
+            async with websockets.connect(url, ping_interval=20, ping_timeout=60) as ws:
                 log.info("WS connected — filling any gaps from REST")
                 await self._fill_gaps_on_reconnect(session)
 
@@ -307,7 +311,11 @@ class ChunkedStreamManager:
     Wraps multiple KlineStreamManagers for universes > 1024 symbols.
     Binance WS allows max 1024 streams per connection.
     """
-    MAX_PER_CONNECTION = 200  # conservative — large symbol names can hit URL limits
+    # 100 (was 200) to halve the per-connection message/write rate. At 200 symbols the
+    # per-tick synchronous parquet writes starved the event loop enough to trip the WS
+    # keepalive, causing a chronic reconnect loop (thousands of 1011 ping-timeout drops).
+    # Also keeps the combined-stream URL well under Binance's length limits.
+    MAX_PER_CONNECTION = 100
 
     def __init__(
         self,
