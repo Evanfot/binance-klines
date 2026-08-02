@@ -44,14 +44,20 @@ log = logging.getLogger(__name__)
 
 async def fetch_all_symbols(session: aiohttp.ClientSession) -> list[str]:
     """
-    Return all active USDT spot symbols from Binance exchange info.
-    Filters to USDT quote asset and TRADING status only.
+    Return all active USDT-M perpetual futures symbols from Binance futures exchange info.
+    Filters to USDT quote asset, PERPETUAL contract type, and TRADING status only.
+
+    Futures exchangeInfo has no ``isSpotTradingAllowed`` flag (that was the spot filter);
+    instead we key on ``contractType == "PERPETUAL"`` to exclude dated delivery contracts
+    (e.g. BTCUSDT_240628). Note perps use 1000-prefixed tickers for low-priced coins
+    (1000SHIBUSDT, 1000PEPEUSDT, …) where spot used the bare ticker — downstream symbol
+    maps must account for this.
     """
     if SYMBOL_OVERRIDE:
         log.info("symbol override active: %d symbols", len(SYMBOL_OVERRIDE))
         return SYMBOL_OVERRIDE
 
-    url = f"{BINANCE_REST_URL}/api/v3/exchangeInfo"
+    url = f"{BINANCE_REST_URL}/fapi/v1/exchangeInfo"
     async with session.get(url) as resp:
         resp.raise_for_status()
         data = await resp.json()
@@ -61,17 +67,26 @@ async def fetch_all_symbols(session: aiohttp.ClientSession) -> list[str]:
         for s in data["symbols"]
         if s["quoteAsset"] == "USDT"
         and s["status"] == "TRADING"
-        and s["isSpotTradingAllowed"]
+        and s["contractType"] == "PERPETUAL"
+        # Guard against junk/vanity listings Binance occasionally returns (e.g. a
+        # CJK-named "币安人生USDT"). A non-ASCII symbol has no data.binance.vision
+        # archive and, worse, poisons its live WS chunk (the combined stream name is
+        # invalid), silently killing ~200 symbols' buffers. Real perps are ASCII
+        # uppercase-alphanumeric (incl. 1000-prefixed meme tickers).
+        and s["symbol"].isascii()
+        and s["symbol"].isalnum()
     ]
-    log.info("discovered %d USDT spot symbols", len(symbols))
+    log.info("discovered %d USDT-M perpetual symbols", len(symbols))
     return sorted(symbols)
 
 
 # ── Date range helpers ─────────────────────────────────────────────────────────
 
 def _binance_launch_date() -> date:
-    """Earliest date Binance has kline data."""
-    return date(2017, 8, 17)
+    """Earliest date Binance has USDT-M perpetual kline data (BTCUSDT perp onboarded
+    2019-09-08). Spot data went back to 2017-08-17; perps do not. Symbols listed later
+    simply 404 for their pre-listing days and are skipped."""
+    return date(2019, 9, 8)
 
 
 def _yesterday() -> date:
@@ -138,6 +153,12 @@ def _parse_csv(zip_bytes: bytes) -> pd.DataFrame:
     # Binance kline CSVs have 12 columns; drop the 12th (always 0)
     df = df.iloc[:, :11]
     df.columns = KLINE_COLUMNS  # type: ignore[assignment]
+
+    # USDT-M futures daily archives ship a header row (open_time,open,…); spot did not.
+    # With header=None that row is ingested as data, so drop it when the first cell of
+    # the first row is not a numeric epoch. Robust to Binance toggling headers on/off.
+    if len(df) and not str(df.iloc[0, 0]).lstrip("-").isdigit():
+        df = df.iloc[1:].reset_index(drop=True)
 
     # Convert timestamps to datetime. Binance moved daily kline archives to
     # MICROSECOND epochs in 2025 (older archives are milliseconds), so detect the

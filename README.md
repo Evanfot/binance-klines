@@ -1,6 +1,6 @@
 # Binance 1m Kline Data System
 
-Institutional-grade historical download + live streaming for Binance spot klines, packaged as a self-contained Docker service with an HTTP API.
+Institutional-grade historical download + live streaming for Binance USDT-M perpetual futures klines, packaged as a self-contained Docker service with an HTTP API.
 
 ---
 
@@ -553,7 +553,7 @@ LIVE_INTRADAY_BUFFER_BARS = 1440   # rolling intraday bar count (24h default)
 WS_MAX_RECONNECT_ATTEMPTS = 10
 WS_RECONNECT_BACKOFF_S    = 1.0    # doubles each attempt, capped at 60s
 
-# ── Restrict to specific symbols (None = all spot symbols) ────────────────────
+# ── Restrict to specific symbols (None = all USDT-M perpetual symbols) ────────
 SYMBOL_OVERRIDE: list[str] | None = None
 ```
 

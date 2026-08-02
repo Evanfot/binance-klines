@@ -100,7 +100,7 @@ async def fetch_rest_klines(
     Fetch completed 1m bars from REST API to fill a gap.
     Returns bars in ascending order, excluding the final (possibly open) bar.
     """
-    url    = f"{BINANCE_REST_URL}/api/v3/klines"
+    url    = f"{BINANCE_REST_URL}/fapi/v1/klines"   # futures REST; spot was /api/v3/klines
     bars   = []
     cursor = start_ms
 

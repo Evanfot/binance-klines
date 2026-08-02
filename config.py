@@ -17,15 +17,20 @@ for _d in (HISTORICAL_DIR, LIVE_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Binance endpoints ─────────────────────────────────────────────────────────
+# This system tracks Binance USDT-M PERPETUAL FUTURES ("um"), not spot. The volume
+# alphas (a006/a014) exploit an open↔volume structure that only lives in perp volume
+# (leverage/liquidation/funding); on spot volume the sleeve is dead. See the trend_trader
+# decision log 202607-perp-volume-signals.md. All endpoints below are the fapi/fstream/
+# futures-archive equivalents of the old spot ones.
 BINANCE_BASE_URL    = "https://data.binance.vision"
-BINANCE_REST_URL    = "https://api.binance.com"
-BINANCE_WS_URL      = "wss://stream.binance.com:9443"
-BINANCE_DATA_PREFIX = "data/spot/daily/klines"
+BINANCE_REST_URL    = "https://fapi.binance.com"        # spot was api.binance.com
+BINANCE_WS_URL      = "wss://fstream.binance.com"       # spot was stream.binance.com:9443
+BINANCE_DATA_PREFIX = "data/futures/um/daily/klines"    # spot was data/spot/daily/klines
 INTERVAL            = "1m"
 
 # ── Universe ──────────────────────────────────────────────────────────────────
-# Set to None to download ALL spot symbols (useful for first run universe discovery).
-# Set to a list of symbols to restrict (e.g. for targeted backfills).
+# Set to None to download ALL USDT-M perpetual symbols (useful for first run universe
+# discovery). Set to a list of symbols to restrict (e.g. for targeted backfills).
 SYMBOL_OVERRIDE: list[str] | None = None
 
 # Dollar-volume universe filter (used by strategy layer, not the downloader).
