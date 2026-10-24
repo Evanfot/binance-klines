@@ -199,7 +199,7 @@ async def download_symbol(
         log.debug("%s  up to date", symbol)
         return {"symbol": symbol, "downloaded": 0, "skipped": 0, "failed": 0}
 
-    log.info("%s  %d missing dates", symbol, len(missing))
+    log.debug("%s  %d missing dates", symbol, len(missing))
 
     downloaded = skipped = failed = 0
 
