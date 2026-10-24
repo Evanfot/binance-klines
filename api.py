@@ -167,6 +167,17 @@ def health():
     return {"status": "ok", "mode": BINANCE_MODE}
 
 
+class _HealthCheckFilter(logging.Filter):
+    """Drops routine /health polls from uvicorn's access log — the docker-compose
+    healthcheck hits it every 30s, which otherwise buries real request/error lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
+
+
 # ── Store status ───────────────────────────────────────────────────────────────
 
 @app.get("/status", tags=["meta"])
