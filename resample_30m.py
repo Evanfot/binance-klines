@@ -1,5 +1,5 @@
 """
-30-minute OHLCV bars resampled from 1m historical parquet files, written to a DuckDB file.
+30-minute OHLCV bars resampled from 1m historical parquet files, written to a Parquet file.
 
 Companion to closes.py/taker.py: daily_closes.parquet only has daily granularity, so
 30m-bar research (trend_trader) needs this separate build. Aggregation mirrors closes.py's
@@ -8,6 +8,13 @@ but buckets with DuckDB's time_bucket() instead of truncating to a calendar day.
 klines/historical/ is read (completed days only), so there's no partial-bar risk from the
 live buffer.
 
+Written as Parquet rather than a raw .duckdb file on purpose: DuckDB's storage format is
+version-locked (a file written by a newer DuckDB can be unreadable by an older one, with
+no warning until the read fails), so this repo and trend_trader would otherwise have to
+track identical duckdb versions forever. Parquet has no such coupling — trend_trader's
+sync_30m.sh builds its own local .duckdb file from this output using whatever duckdb
+version it has pinned.
+
 Self-contained (no `from config import ...`) so it can be `docker cp`'d into the running
 container and executed standalone — code is baked into the image at build time, not
 bind-mounted, so this file wouldn't otherwise be visible until the next image
@@ -15,7 +22,7 @@ rebuild/redeploy. See trend_trader/scripts/sync_30m.sh.
 
 Schema: open_time, symbol, open, high, low, close, volume, quote_volume, num_trades,
         taker_buy_base_volume, taker_buy_quote_volume, vwap
-Output: klines/processed/ohlcv_30m.duckdb (table: binance_30m)
+Output: klines/processed/ohlcv_30m.parquet
 
 Not part of the daily cron — this is a research artifact, rerun manually after a
 bulk download/backfill:
@@ -34,12 +41,11 @@ log = logging.getLogger(__name__)
 
 ROOT = Path(os.environ["BINANCE_DATA_ROOT"]) if os.environ.get("BINANCE_DATA_ROOT") else Path(__file__).parent
 HISTORICAL_DIR = ROOT / "klines" / "historical"
-OUT_PATH = ROOT / "klines" / "processed" / "ohlcv_30m.duckdb"
+OUT_PATH = ROOT / "klines" / "processed" / "ohlcv_30m.parquet"
 INTERVAL = "1m"
 BUCKET_MINUTES = 30
 
 _AGG_SQL = """
-    CREATE OR REPLACE TABLE binance_30m AS
     SELECT
         time_bucket(INTERVAL '{bucket} minutes', open_time) AS open_time,
         regexp_extract(filename, '/([^/]+)/1m/', 1)         AS symbol,
@@ -63,24 +69,27 @@ _AGG_SQL = """
 
 
 def build(output_path: Path = OUT_PATH, bucket_minutes: int = BUCKET_MINUTES) -> None:
-    """Rebuild ohlcv_30m.duckdb from all 1m historical files. Overwrites any existing file."""
+    """Rebuild ohlcv_30m.parquet from all 1m historical files. Overwrites any existing file."""
     glob = str(HISTORICAL_DIR / "*" / INTERVAL / "*.parquet")
     log.info("building %dm bars from %s", bucket_minutes, glob)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(output_path))
+    con = duckdb.connect()  # in-memory — the output file is Parquet, not a DuckDB database
     con.execute("SET TimeZone='UTC'")
+    select_sql = _AGG_SQL.format(bucket=bucket_minutes, glob=glob)
     try:
-        con.execute(_AGG_SQL.format(bucket=bucket_minutes, glob=glob))
+        con.execute(f"COPY ({select_sql}) TO '{output_path}' (FORMAT PARQUET)")
     except duckdb.IOException:
         con.close()
         log.warning("no historical 1m files found at %s — ohlcv_30m not written", glob)
         return
 
     n_rows, n_symbols = con.execute(
-        "SELECT count(*), count(DISTINCT symbol) FROM binance_30m"
+        f"SELECT count(*), count(DISTINCT symbol) FROM read_parquet('{output_path}')"
     ).fetchone()
-    lo, hi = con.execute("SELECT min(open_time), max(open_time) FROM binance_30m").fetchone()
+    lo, hi = con.execute(
+        f"SELECT min(open_time), max(open_time) FROM read_parquet('{output_path}')"
+    ).fetchone()
     con.close()
 
     log.info(
